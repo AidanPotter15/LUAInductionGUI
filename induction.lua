@@ -60,6 +60,7 @@ end
 
 local function formatEta(seconds)
   if seconds ~= seconds or seconds >= 365 * 86400 then return "over a year" end
+  seconds = math.max(0, seconds)
   local s = math.floor(seconds + 0.5)
   local days = math.floor(s / 86400)
   local hrs  = math.floor(s % 86400 / 3600)
@@ -116,15 +117,23 @@ local function autoScale(mon)
   end
 end
 
-local function setupDisplays()
+-- `initial` controls whether a missing named monitor is a hard error (useful
+-- at startup, to catch typos) or just skipped (so a later disconnect of that
+-- monitor doesn't take the whole program down; it'll pick it back up once
+-- reattached).
+local function setupDisplays(initial)
   displays = { { dev = term.current(), isMonitor = false } }
   local monitors
   if MONITOR_NAME then
     local mon = peripheral.wrap(MONITOR_NAME)
     if not mon or not mon.setTextScale then
-      error(("No monitor called %q is attached"):format(MONITOR_NAME), 0)
+      if initial then
+        error(("No monitor called %q is attached"):format(MONITOR_NAME), 0)
+      end
+      monitors = {}
+    else
+      monitors = { mon }
     end
-    monitors = { mon }
   else
     monitors = { peripheral.find("monitor") }
   end
@@ -281,6 +290,15 @@ local function buildRows(view, w, h)
       colors.lightGray, true)
     text(wide and "the display resumes automatically." or "display will resume.",
       colors.lightGray, true)
+  elseif view.state == "error" then
+    local wide = w >= 35
+    add(false)
+    text("Read error", colors.red, true)
+    add(false)
+    text(wide and "The Induction Port returned an" or "Unexpected error;",
+      colors.lightGray, true)
+    text(wide and "unexpected error; retrying." or "retrying...",
+      colors.lightGray, true)
   else -- no port found
     local wide = w >= 35
     add(false)
@@ -326,7 +344,7 @@ end
 -- ------------------------------ main loop -------------------------------
 
 local function main()
-  setupDisplays()
+  setupDisplays(true)
   local port, view
   local spin = 1
   local timer = os.startTimer(0)
@@ -347,8 +365,8 @@ local function main()
         elseif why == "unformed" then
           view = { state = "unformed" }
         else
-          port = nil                    -- lost the port; rescan next tick
-          view = { state = "noport" }
+          port = nil                    -- peripheral may be stale; rescan next tick
+          view = { state = "error" }
         end
       end
       for _, d in ipairs(displays) do
