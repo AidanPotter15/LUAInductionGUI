@@ -160,8 +160,11 @@ local function safeColor(d, c, fallback)
 end
 
 -- Draw one full row from colored segments; pads to the screen edge so no
--- clear() is needed between frames (avoids flicker).
-local function paint(d, y, w, segs, center)
+-- clear() is needed between frames (avoids flicker). `rowBg` is the
+-- background for any part of the row a segment doesn't set explicitly
+-- (e.g. the padding around a centered title), so a row can read as a
+-- solid-colored banner instead of colored text floating on black.
+local function paint(d, y, w, segs, center, rowBg)
   segs = segs or {}
   d.setCursorPos(1, y)
   local remaining = w
@@ -169,7 +172,7 @@ local function paint(d, y, w, segs, center)
     if remaining <= 0 or #text == 0 then return end
     if #text > remaining then text = text:sub(1, remaining) end
     d.setTextColor(safeColor(d, fg, colors.white))
-    d.setBackgroundColor(safeColor(d, bg, colors.black))
+    d.setBackgroundColor(safeColor(d, bg or rowBg, colors.black))
     d.write(text)
     remaining = remaining - #text
   end
@@ -235,15 +238,25 @@ local function kvRow(w, label, value, vcolor)
   return { segs = { { " " }, { value, fg = vcolor } } }
 end
 
+-- Banner color reflects overall health at a glance: blue while everything
+-- is fine, orange for an incomplete multiblock, red for anything wrong.
+local STATUS_COLOR = {
+  ok       = colors.blue,
+  unformed = colors.orange,
+  error    = colors.red,
+  noport   = colors.red,
+}
+
 local function buildRows(view, w, h)
   local rows = {}
   local function add(r) rows[#rows + 1] = r end
-  local function text(str, color, center)
-    add({ segs = { { str, fg = color } }, center = center })
+  local function text(str, color, center, bg)
+    add({ segs = { { str, fg = color, bg = bg } }, center = center, bg = bg })
   end
   local roomy = h >= 15
+  local statusColor = STATUS_COLOR[view.state] or colors.blue
 
-  text(TITLE, colors.yellow, true)
+  text(TITLE, colors.white, true, statusColor)
   text(("\140"):rep(w), colors.gray)
 
   if view.state == "ok" then
@@ -268,18 +281,21 @@ local function buildRows(view, w, h)
         net > 0 and colors.lime or net < 0 and colors.red or colors.lightGray))
       if h >= 13 then
         if math.abs(net) < 1e-9 then
-          add(kvRow(w, "Trend", "steady", colors.lightGray))
+          add(kvRow(w, "Trend", "steady", colors.cyan))
         elseif net > 0 then
-          add(kvRow(w, "Full in", formatEta((s.capacity - s.energy) / net / 20)))
+          add(kvRow(w, "Full in", formatEta((s.capacity - s.energy) / net / 20), colors.lime))
         else
-          add(kvRow(w, "Empty in", formatEta(s.energy / -net / 20)))
+          add(kvRow(w, "Empty in", formatEta(s.energy / -net / 20), colors.orange))
         end
       end
     end
     if h >= 14 and s.cells then
       if roomy then add(false) end
-      text(string.format("Cells: %d   Providers: %d", s.cells, s.providers or 0),
-        colors.lightGray, true)
+      add({ segs = {
+        { string.format("Cells: %d", s.cells), fg = colors.cyan },
+        { "   " },
+        { string.format("Providers: %d", s.providers or 0), fg = colors.purple },
+      }, center = true })
     end
   elseif view.state == "unformed" then
     local wide = w >= 35
@@ -328,7 +344,7 @@ local function render(d, view, spin, isMonitor)
     elseif row.bar then
       drawBar(d, y, w, row.bar, row.label)
     else
-      paint(d, y, w, row.segs, row.center)
+      paint(d, y, w, row.segs, row.center, row.bg)
     end
   end
   if not isMonitor and h >= 8 then
